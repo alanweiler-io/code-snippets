@@ -1,0 +1,504 @@
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.RectF;
+import android.os.Bundle;
+import android.util.DisplayMetrics;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.RelativeLayout;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.ToggleButton;
+import androidx.appcompat.app.ActionBar;
+import androidx.fragment.app.Fragment;
+import io.alanweiler.buses.FoundMatchBus;
+import io.alanweiler.utilities.FormattingStyles;
+import io.alanweiler.utilities.ThisDocument;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDChoice;
+import org.greenrobot.eventbus.EventBus;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/** Copyright Alan Weiler 2018 **/
+
+public class PdfPageFragment extends Fragment {
+
+    // Define the UI elements
+
+    ImageView imageView;
+    Bitmap pdfPageImage;
+    TextView pageNumberText;
+    String pageNumberString;
+    String pageObjectNumber;
+    RectF rect;
+    RelativeLayout rl;
+    EditText editText;
+    ToggleButton checkBox;
+    Spinner spinner;
+    ArrayAdapter<String> spAdapter;
+
+    double fullSizeNumber;
+    double fullSizeHeightNumber;
+
+    // Predefined sizes of PDF's coming from PDFBox
+    double PDF_WIDTH = 612.00;
+    double PDF_HEIGHT = 792.00;
+
+    int screenWidth;
+    int screenHeight;
+    double aspectRatio;
+    double heightRatio;
+
+    float pageNumberHeight;
+
+    Map<String, Map<String, Object>> fieldSettings = new HashMap<>();
+    Map<String, Object> fieldSettingsInner;
+
+    PDDocument pdfDocument;
+    PDAcroForm forms;
+
+    boolean requiredFieldsNotFilled = false;
+
+    View v;
+
+    public PdfPageFragment() {
+        // Required empty public constructor
+    }
+
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                             Bundle savedInstanceState) {
+
+        // Inflate the layout for this fragment
+
+        v = inflater.inflate(R.layout.fragment_pdf_page, container, false);
+
+        pdfDocument = ThisDocument.INSTANCE.getPdfDocument();
+        imageView =  v.findViewById(R.id.pdfPageImage);
+        pageNumberText = v.findViewById(R.id.pdfViewerPage);
+
+        imageView.setImageBitmap(pdfPageImage);
+
+        pageNumberText.setText(pageNumberString);
+        rl = v.findViewById(R.id.pdfPageViewerLayoutInner);
+
+        DisplayMetrics displayMetrics = new DisplayMetrics();
+
+        getActivity().getWindowManager().getDefaultDisplay().getMetrics(displayMetrics);
+
+        screenWidth = displayMetrics.widthPixels;
+        screenHeight = displayMetrics.heightPixels;
+
+        aspectRatio = Math.round((double)screenHeight / (double)screenWidth * 100.0) / 100.0;
+        heightRatio = Math.round((double)screenHeight / PDF_HEIGHT * 100.0) / 100.0;
+
+        pageNumberText.measure(0, 0);
+
+        pageNumberHeight = pageNumberText.getMeasuredHeight();
+
+        rl.measure(0, 0);
+
+        // This checks to see if the keyboard is visible and sets the values accordingly
+
+        fullSizeNumber = screenWidth / PDF_WIDTH;
+        fullSizeHeightNumber = screenHeight / PDF_HEIGHT;
+
+        rl.setBackgroundColor(Color.WHITE);
+
+        try {
+
+            forms = pdfDocument.getDocumentCatalog().getAcroForm();
+
+            if (forms != null) {
+
+                for (int i = 0; i < forms.getFields().size(); i++) {
+
+                    PDRectangle pdRect = forms.getFields().get(i).getWidget().getRectangle();
+                    rect = new RectF(pdRect.getLowerLeftX(), pdRect.getLowerLeftY(), pdRect.getUpperRightX(), pdRect.getUpperRightY());
+
+                    // Create edit texts based on the TextFields from the Acroforms
+
+                    if (forms.getFields().get(i).getFieldType().equals("Tx") && forms.getFields().get(i).getWidget().getPage().toString().equals(pageObjectNumber)) {
+
+                        fieldSettingsInner = new HashMap<>();
+
+                        // Set full size measurements
+
+                        fieldSettingsInner.put("full_size_width", convertDoubleToInt(pdRect.getWidth() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_height", convertDoubleToInt(pdRect.getHeight() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setX", convertDoubleToInt(pdRect.getLowerLeftX() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setY", convertDoubleToInt(flipYaxis((float)(pdRect.getUpperRightY() * fullSizeNumber - ((PDF_HEIGHT * heightRatio) / aspectRatio) + pageNumberHeight + 296))));
+
+                        fieldSettings.put(forms.getFields().get(i).getFullyQualifiedName(), fieldSettingsInner);
+
+                        editText = new EditText(getContext());
+
+                        ActionBar.LayoutParams lp = new ActionBar.LayoutParams((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_width"),
+                                (int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_height"));
+                        editText.setX((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setX"));
+                        editText.setY((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setY"));
+
+                        editText.setLayoutParams(lp);
+                        editText.setTextSize(12);
+                        editText.setGravity(View.TEXT_ALIGNMENT_TEXT_START);
+                        editText.requestFocus();
+                        editText.setBackgroundColor(Color.parseColor("#f1f4ff"));
+                        editText.setTextColor(Color.BLACK);
+                        editText.setPadding(0, 0, 0, 2);
+
+
+                        // Set default value if any
+
+                        if (forms.getFields().get(i).getValue() != null || !forms.getFields().get(i).getValue().equals("")) {
+
+                            editText.setText(forms.getFields().get(i).getValue().toString());
+                        }
+
+                        if (forms.getFields().get(i).getFullyQualifiedName().equals("service_date")) {
+
+                            editText.setText(FormattingStyles.INSTANCE.getStandardMDY(Calendar.getInstance().getTime()));
+                        }
+
+                        if (forms.getFields().get(i).getFullyQualifiedName().equals("facility")) {
+
+                            editText.setText("");
+                        }
+
+                        // Set tag for data retrieval
+
+                        editText.setTag(forms.getFields().get(i).getFullyQualifiedName());
+
+                        rl.addView(editText);
+
+                        // Create checkboxes based on Button fields in Acroforms
+
+                    } else if (forms.getFields().get(i).getFieldType().equals("Btn") && forms.getFields().get(i).getWidget().getPage().toString().equals(pageObjectNumber)) {
+
+                        checkBox = new ToggleButton(getContext());
+
+                        fieldSettingsInner = new HashMap<>();
+
+                        // Set fullscreen objects
+
+                        fieldSettingsInner.put("full_size_width", convertDoubleToInt(pdRect.getWidth() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_height", convertDoubleToInt(pdRect.getHeight() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setX", convertDoubleToInt(pdRect.getLowerLeftX() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setY", convertDoubleToInt(flipYaxis((float)(pdRect.getUpperRightY() * fullSizeNumber - ((PDF_HEIGHT * heightRatio) / aspectRatio) + pageNumberHeight + 296))));
+
+                        fieldSettings.put(forms.getFields().get(i).getFullyQualifiedName(), fieldSettingsInner);
+
+                        // Set initial layout for checkboxes
+
+                        ActionBar.LayoutParams lp = new ActionBar.LayoutParams((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_width"),
+                                (int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_height"));
+                        checkBox.setX((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setX"));
+                        checkBox.setY((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setY"));
+
+                        checkBox.setLayoutParams(lp);
+                        checkBox.setPadding(0, 0, 0, 0);
+                        checkBox.setGravity(Gravity.CENTER | Gravity.TOP);
+                        checkBox.setTextOn("X");
+                        checkBox.setTextOff("");
+                        checkBox.setChecked(false);
+                        checkBox.setBackgroundColor(Color.parseColor("#f1f4ff"));
+                        checkBox.setTextSize(8);
+
+                        // Set default value if any
+
+                        if (forms.getFields().get(i).getValue().equals("true")) {
+
+                            checkBox.setChecked(true);
+                        }
+
+                        // Set tag from data retrieval
+
+                        checkBox.setTag(forms.getFields().get(i).getFullyQualifiedName());
+
+                        rl.addView(checkBox);
+
+
+                        // Create Dropdowns based on the Choice fields in the Acroforms
+
+                    } else if (forms.getFields().get(i).getFieldType().equals("Ch") && forms.getFields().get(i).getWidget().getPage().toString().equals(pageObjectNumber)) {
+
+                        spinner = new Spinner(getContext());
+
+                        PDChoice choice = (PDChoice) forms.getField(forms.getFields().get(i).getFullyQualifiedName());
+
+                        fieldSettingsInner = new HashMap<>();
+
+                        // Set full screen objects
+
+                        fieldSettingsInner.put("full_size_width", convertDoubleToInt(pdRect.getWidth() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_height", convertDoubleToInt(pdRect.getHeight() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setX", convertDoubleToInt(pdRect.getLowerLeftX() * fullSizeNumber));
+                        fieldSettingsInner.put("full_size_setY", convertDoubleToInt(flipYaxis((float)(pdRect.getUpperRightY() * fullSizeNumber - ((PDF_HEIGHT * heightRatio) / aspectRatio) + pageNumberHeight + 296))));
+
+                        fieldSettings.put(forms.getFields().get(i).getFullyQualifiedName(), fieldSettingsInner);
+
+                        // Set initial layout
+
+                        ActionBar.LayoutParams lp = new ActionBar.LayoutParams((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_width"),
+                                (int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_height"));
+                        spinner.setX((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setX"));
+                        spinner.setY((int) fieldSettings.get(forms.getFields().get(i).getFullyQualifiedName()).get("full_size_setY"));
+
+                        ArrayList<String> list = new ArrayList<>();
+
+                        for (int j = 0; j < choice.getOptionsDisplayValues().size(); j++) {
+
+                            list.add(choice.getOptionsDisplayValues().get(j));
+                        }
+
+                        spAdapter = new ArrayAdapter<>(this.getActivity(),
+                                R.layout.pdf_spinner_layout, list);
+
+                        spinner.setLayoutParams(lp);
+
+                        spinner.setBackgroundColor(Color.parseColor("#f1f4ff"));
+
+                        spinner.setTag(forms.getFields().get(i).getFullyQualifiedName());
+                        spinner.setAdapter(spAdapter);
+                        spinner.setPadding(0, 0, 0, 0);
+
+                        // Set default value if any
+
+                        String thisFieldValue = String.valueOf(forms.getFields().get(i).getValue());
+                        thisFieldValue = thisFieldValue.replaceAll("\\[", "").replaceAll("\\]", "");
+
+                        for (int j = 0; j < list.size(); j++) {
+
+                            if ((list.get(j).equals(thisFieldValue))) {
+
+                                spinner.setSelection(j);
+                                break;
+                            }
+                        }
+
+                        rl.addView(spinner);
+                    }
+                }
+            }
+
+        } catch (IOException e) {
+
+            e.printStackTrace();
+        }
+
+        rl.requestLayout();
+
+        return v;
+
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+
+        if(pdfPageImage != null) {
+
+            pdfPageImage.recycle();
+            pdfDocument = null;
+        }
+
+    }
+
+    @Override
+    public void onAttach(Context context) {
+        super.onAttach(context);
+
+    }
+
+    @Override
+    public void onDetach() {
+        super.onDetach();
+
+    }
+
+    // ------------------------------------ CLASS METHODS --------------------------------------- //
+
+    public void setImageView(Bitmap bitmap) {
+
+        pdfPageImage = bitmap;
+
+        if (imageView != null) {
+
+            imageView.setImageBitmap(pdfPageImage);
+        }
+
+    }
+
+    public void setPageNumber(String number) {
+
+        pageNumberString = number;
+    }
+
+    public void setPageObjectNumber(String pageObject) {
+
+        pageObjectNumber = pageObject;
+    }
+
+
+    public float flipYaxis(float yAxis) {
+
+        return 792 - yAxis;
+    }
+
+    public void updateDocument(List<String> requiredFields, boolean lastPage) {
+
+        // Go through all the fields, check type and update the documents Acroform
+
+        for (int k = 0; k < rl.getChildCount(); k++) {
+
+            View v = rl.getChildAt(k);
+
+            isRequiredField(requiredFields, v);
+
+            if (v instanceof EditText) {
+
+                EditText thisEditText = (EditText) rl.getChildAt(k);
+
+                // Fill text fields of form to the document
+
+                try {
+
+                    for (int l = 0; l < forms.getFields().size(); l++) {
+
+                        if (thisEditText.getTag().equals(forms.getFields().get(l).getFullyQualifiedName()) && forms.getFields().get(l).getFieldType().equals("Tx")) {
+
+                            pdfDocument.getDocumentCatalog().getAcroForm().getFields().get(l).setValue(thisEditText.getText().toString());
+                            pdfDocument.getDocumentCatalog().getAcroForm().setNeedAppearances(true);
+                        }
+                    }
+
+                } catch (IOException e) {
+
+                    e.printStackTrace();
+                }
+
+            } else if (v instanceof ToggleButton) {
+
+                ToggleButton thisCheckBox = (ToggleButton) rl.getChildAt(k);
+
+                // Get the data from all checkboxes
+
+                try {
+
+
+                    for (int l = 0; l < forms.getFields().size(); l++) {
+
+                        if (thisCheckBox.getTag().equals(forms.getFields().get(l).getFullyQualifiedName()) && forms.getFields().get(l).getFieldType().equals("Btn")) {
+                            if (thisCheckBox.isChecked()) {
+
+                                pdfDocument.getDocumentCatalog().getAcroForm().getFields().get(l).setValue(String.valueOf(thisCheckBox.isChecked()));
+                                pdfDocument.getDocumentCatalog().getAcroForm().setNeedAppearances(true);
+                            }
+                        }
+                    }
+
+                } catch (IOException e) {
+
+                    e.printStackTrace();
+
+                }
+
+            } else if (v instanceof Spinner) {
+
+                Spinner thisSpinner = (Spinner) rl.getChildAt(k);
+
+                try {
+
+                    // Get the data from the drop down menus
+
+                    for (int l = 0; l < forms.getFields().size(); l++) {
+
+                        if (thisSpinner.getTag().equals(forms.getFields().get(l).getFullyQualifiedName()) && forms.getFields().get(l).getFieldType().equals("Ch")) {
+
+                            pdfDocument.getDocumentCatalog().getAcroForm().getFields().get(l).setValue(thisSpinner.getSelectedItem().toString());
+                            pdfDocument.getDocumentCatalog().getAcroForm().setNeedAppearances(true);
+                        }
+                    }
+
+                } catch (IOException e) {
+
+                    e.printStackTrace();
+                }
+
+                // Sets the document
+
+                if (lastPage) {
+
+                    EventBus.getDefault().post(new FoundMatchBus(false, true));
+                }
+
+                ThisDocument.INSTANCE.setPdfDocument(pdfDocument);
+
+            }
+        }
+    }
+
+    public void isRequiredField(List<String> requiredFields, View field) {
+
+        for (int i = 0; i < requiredFields.size(); i++) {
+
+            if (field instanceof EditText) {
+
+                EditText thisField = (EditText)field;
+
+                if (thisField.getTag().equals(requiredFields.get(i))) {
+
+                    if (thisField.getText().toString().equals("")) {
+
+                        thisField.setBackgroundColor(getResources().getColor(android.R.color.holo_red_dark));
+
+                        requiredFieldsNotFilled = true;
+
+                        EventBus.getDefault().post(new FoundMatchBus(true, false));
+                    }
+                }
+
+            } else if (field instanceof Spinner) {
+
+                Spinner thisField = (Spinner)field;
+
+                if (thisField.getTag().equals(requiredFields.get(i))) {
+
+                    if (thisField.getSelectedItem().toString().equals("")) {
+
+                        thisField.setBackgroundColor(getResources().getColor(android.R.color.holo_red_dark));
+
+                        requiredFieldsNotFilled = true;
+                        EventBus.getDefault().post(new FoundMatchBus(true, false));
+                    }
+                }
+            }
+        }
+    }
+
+
+    public int convertDoubleToInt(double number) {
+
+        Double n = number;
+        return n.intValue();
+    }
+}
