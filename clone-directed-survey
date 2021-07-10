@@ -1,0 +1,121 @@
+function cloneDirectedSurvey() {
+
+  let queryString = "SELECT * FROM surveys WHERE id = $1;";
+    let params = [surveyId];
+    pool.query(queryString, params, (sq_err, sq_result) => {
+
+      if (sq_err) {
+
+        console.log("Clone survey error - at get survey: " + sq_err.stack + " ERROR: " + sq_result);
+        return;
+      }
+
+      let surveyQuery = sq_result.rows[0];
+
+      let queryString = "INSERT INTO surveys(id, org_id, survey_name, instructions, created_at, updated_at, is_deleted) VALUES " + 
+                "($1, $2, $3, $4, $5, $6, $7) returning id;";
+      let params = [uuid.v4(), organizationId, surveyQuery.name, surveyQuery.instructions, dateutil.date(), dateutil.date(), false];
+      pool.query(queryString, params, (si_err, si_result) => {
+
+        if (si_err) {
+
+          console.log("Clone survey error - at insert survey: " + si_err.stack);
+          return;
+        }
+
+        let newSurveyId = si_result.rows[0].id;
+
+        let queryString = "SELECT * FROM question WHERE survey_id = $1 ORDER BY question_position;";
+        let params = [surveyId];
+
+        pool.query(queryString, params, (qq_err, qq_result) => {
+
+          if (qq_err) {
+
+            console.log("Clone survey error - at question query: " + qq_err.stack);
+            return;
+          }
+
+          let rowCount = qq_result.rowCount;
+          let questions = qq_result.rows;
+          let map = new Map();
+
+          function insertQuestions(questions, index, rowCount, map, surveyId, newSurveyId) {
+
+            let queryString = "INSERT INTO question(id, survey_id, title, content, created, updated, is_deleted, question_position, org_id) " + 
+                      "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id;";
+            let params = [uuid.v4(), newSurveyId, questions[index].title, questions[index].content, dateutil.date(), dateutil.date(), false, questions[index].question_position, organizationId];
+            pool.query(queryString, params, (qi_err, qi_result) => {
+
+              if (qi_err) {
+
+                console.log("Clone survey error - at question insert: " + qi_err.stack);
+                return;
+              }
+              console.log("QI RESULT: ");
+              console.log(qi_result);
+
+              if (qi_result.rowCount > 0) {
+                let oldId = questions[index].id;
+                map.set(oldId, qi_result.rows[0].id);
+              }
+
+              if (index < rowCount - 1) {
+
+                insertQuestions(questions, ++index, rowCount, map, surveyId, newSurveyId);
+
+              } else {
+
+                let queryString = "SELECT qa.* FROM question_answer qa LEFT JOIN question q ON q.id = qa.question_id WHERE q.survey_id = $1;";
+                let params = [surveyId];
+                pool.query(queryString, params, (qaq_err, qaq_result) => {
+
+                  if (qaq_err) {
+
+                    console.log("Clone survey error - at question answer query: " + qaq_err.stack);
+                    return;
+                  }
+
+                  if (qaq_result.rowCount > 0) {
+
+                    let questionAnswers = qaq_result.rows;
+                    let qaRowCount = qaq_result.rowCount;
+
+                    insertQuestionAnswers(questionAnswers, 0, qaRowCount, map);
+                  }
+                });
+              }
+            });
+          }
+
+          function insertQuestionAnswers(questionAnswers, index, rowCount, map) {
+
+            let queryString = "INSERT INTO question_answer(id, created, updated, question_id, label, id_of_next, denied) " + 
+                      "VALUES ($1, $2, $3, $4, $5, $6, $7);";
+            let thisQuestionId = map.get(questionAnswers[index].question_id);
+            let nextQuestionId = questionAnswers[index].next_question_id != null ? map.get(questionAnswers[index].next_question_id) : null;
+            let params = [uuid.v4(), dateutil.date(), dateutil.date(), thisQuestionId, questionAnswers[index].label,
+                    nextQuestionId, questionAnswers[index].denied];
+
+            pool.query(queryString, params, (qai_err, qai_result) => {
+
+              if (qai_err) {
+
+                console.log("Clone survey error - at question answer insert: " + qai_err.stack);
+                return;
+              }
+
+              if (index < rowCount - 1) {
+
+                insertQuestionAnswers(questionAnswers, ++index, rowCount, map);
+
+              } else {
+
+                console.log("DONE");
+              }
+            })
+          }
+       });
+     });
+  });
+}
